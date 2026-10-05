@@ -238,6 +238,12 @@ an object that will be resolved by the output fields.
 Our mutation type then creates the `introduceShip` field using the return
 value of `mutation_with_client_mutation_id`.
 
+The returned object or mapping may also be immutable (for example a frozen
+dataclass or a read-only mapping). In that case it is wrapped instead of
+being modified, preserving all of its attributes, methods and custom output
+field resolver behavior. The same immutable result can therefore be reused
+by several calls, each one echoing back its own `clientMutationId`.
+
 ## Contributing
 
 After cloning this repository from GitHub,
