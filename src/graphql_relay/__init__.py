@@ -35,6 +35,15 @@ from .connection.array_connection import (
     SizedSliceable,
 )
 
+# Helpers for creating connections from ordered data sources
+from .connection.ordered_connection import (
+    connection_from_ordered_source,
+    cursor_to_ordered_key,
+    ordered_key_to_cursor,
+    IncompleteScanError,
+    OrderedSource,
+)
+
 # Helper for creating mutations with client mutation IDs
 from .mutation.mutation import (
     mutation_with_client_mutation_id,
@@ -68,8 +77,10 @@ __all__ = [
     "connection_from_array",
     "connection_from_array_slice",
     "connection_definitions",
+    "connection_from_ordered_source",
     "cursor_for_object_in_connection",
     "cursor_to_offset",
+    "cursor_to_ordered_key",
     "Edge",
     "EdgeConstructor",
     "EdgeType",
@@ -79,12 +90,15 @@ __all__ = [
     "global_id_field",
     "GraphQLConnectionDefinitions",
     "GraphQLNodeDefinitions",
+    "IncompleteScanError",
     "MutationFn",
     "MutationFnWithoutArgs",
     "mutation_with_client_mutation_id",
     "node_definitions",
     "NullResult",
     "offset_to_cursor",
+    "ordered_key_to_cursor",
+    "OrderedSource",
     "PageInfo",
     "PageInfoConstructor",
     "PageInfoType",
