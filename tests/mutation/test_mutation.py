@@ -1,3 +1,7 @@
+from asyncio import Event, gather
+from dataclasses import dataclass
+from types import MappingProxyType
+
 from pytest import mark
 
 from graphql import (
@@ -319,3 +323,188 @@ def describe_mutation_with_client_mutation_id():
             }
             '''  # noqa: E501
         )
+
+    def supports_mutations_returning_frozen_dataclasses():
+        @dataclass(frozen=True)
+        class FrozenResult:
+            result: int
+
+            def doubled_result(self):
+                return self.result * 2
+
+        payload = FrozenResult(2)
+
+        def frozen_mutate(_info, **_input):
+            return payload
+
+        def doubled_resolve(obj, _info):
+            # actively reads an attribute of the original result object
+            return obj.doubled_result()
+
+        some_mutation = mutation_with_client_mutation_id(
+            "SomeMutation",
+            {},
+            {
+                "result": GraphQLField(GraphQLInt),
+                "doubled": GraphQLField(GraphQLInt, resolve=doubled_resolve),
+            },
+            frozen_mutate,
+        )
+        schema = wrap_in_schema({"someMutation": some_mutation})
+        source = """
+            mutation {
+              someMutation(input: {clientMutationId: "abc"}) {
+                result
+                doubled
+                clientMutationId
+              }
+            }
+            """
+        assert graphql_sync(schema, source) == (
+            {
+                "someMutation": {
+                    "result": 2,
+                    "doubled": 4,
+                    "clientMutationId": "abc",
+                }
+            },
+            None,
+        )
+        # the original immutable payload was not modified
+        assert payload == FrozenResult(2)
+        assert not hasattr(payload, "clientMutationId")
+
+    def supports_mutations_returning_read_only_mappings():
+        payload = MappingProxyType({"some_data": 1})
+
+        def mapping_mutate(_info, **_input):
+            return payload
+
+        def mapping_resolve(obj, _info):
+            return obj["some_data"]
+
+        some_mutation = mutation_with_client_mutation_id(
+            "SomeMutation",
+            {},
+            {"result": GraphQLField(GraphQLInt, resolve=mapping_resolve)},
+            mapping_mutate,
+        )
+        schema = wrap_in_schema({"someMutation": some_mutation})
+        source = """
+            mutation {
+              someMutation(input: {clientMutationId: "abc"}) {
+                result
+                clientMutationId
+              }
+            }
+            """
+        assert graphql_sync(schema, source) == (
+            {"someMutation": {"result": 1, "clientMutationId": "abc"}},
+            None,
+        )
+        # the original read-only mapping was not modified
+        assert dict(payload) == {"some_data": 1}
+
+    @mark.asyncio
+    async def supports_sync_mutations_returning_awaitables():
+        async def get_payload():
+            return Result(1)
+
+        def awaitable_mutate(_info, **_input):
+            # a sync function returning an awaitable
+            return get_payload()
+
+        some_mutation = mutation_with_client_mutation_id(
+            "SomeMutation",
+            {},
+            {"result": GraphQLField(GraphQLInt)},
+            awaitable_mutate,
+        )
+        schema = wrap_in_schema({"someMutation": some_mutation})
+        source = """
+            mutation {
+              someMutation(input: {clientMutationId: "abc"}) {
+                result
+                clientMutationId
+              }
+            }
+            """
+        assert await graphql(schema, source) == (
+            {"someMutation": {"result": 1, "clientMutationId": "abc"}},
+            None,
+        )
+
+    @mark.asyncio
+    async def supports_interleaved_mutations_reusing_immutable_payload():
+        @dataclass(frozen=True)
+        class SharedResult:
+            result: int
+
+            def doubled_result(self):
+                return self.result * 2
+
+        payload = SharedResult(1)
+
+        both_started = Event()
+        started_count = 0
+
+        async def shared_mutate(_info, **_input):
+            nonlocal started_count
+            started_count += 1
+            if started_count == 2:
+                both_started.set()
+            # ensure both mutations are in flight before either returns
+            # the same shared payload
+            await both_started.wait()
+            return payload
+
+        def doubled_resolve(obj, _info):
+            # actively reads an attribute of the original result object
+            return obj.doubled_result()
+
+        some_mutation = mutation_with_client_mutation_id(
+            "SomeMutation",
+            {},
+            {
+                "result": GraphQLField(GraphQLInt),
+                "doubled": GraphQLField(GraphQLInt, resolve=doubled_resolve),
+            },
+            shared_mutate,
+        )
+        schema = wrap_in_schema({"someMutation": some_mutation})
+        source_template = """
+            mutation {
+              someMutation(input: {clientMutationId: "%s"}) {
+                result
+                doubled
+                clientMutationId
+              }
+            }
+            """
+        result_a, result_b = await gather(
+            graphql(schema, source_template % "a"),
+            graphql(schema, source_template % "b"),
+        )
+        assert result_a == (
+            {
+                "someMutation": {
+                    "result": 1,
+                    "doubled": 2,
+                    "clientMutationId": "a",
+                }
+            },
+            None,
+        )
+        assert result_b == (
+            {
+                "someMutation": {
+                    "result": 1,
+                    "doubled": 2,
+                    "clientMutationId": "b",
+                }
+            },
+            None,
+        )
+        # the shared immutable payload was not modified
+        assert payload == SharedResult(1)
+        assert not hasattr(payload, "clientMutationId")

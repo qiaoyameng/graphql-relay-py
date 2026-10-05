@@ -1,5 +1,5 @@
 from collections.abc import Mapping
-from inspect import iscoroutinefunction
+from inspect import isawaitable
 from typing import Any, Callable, Dict, Optional
 
 from graphql import (
@@ -20,6 +20,7 @@ from graphql.pyutils import AwaitableOrValue
 
 __all__ = [
     "mutation_with_client_mutation_id",
+    "ImmutableResult",
     "MutationFn",
     "MutationFnWithoutArgs",
     "NullResult",
@@ -37,6 +38,46 @@ MutationFn = Callable[..., AwaitableOrValue[Any]]
 class NullResult:
     def __init__(self, clientMutationId: Optional[str] = None) -> None:
         self.clientMutationId = clientMutationId
+
+
+class ImmutableResult:
+    """Wraps an immutable payload so a per-request clientMutationId
+    can be attached without modifying the original result object.
+
+    Attribute access is delegated to the wrapped payload, so attributes,
+    methods and custom output field resolvers keep working as if the
+    original result object had been returned directly.
+    """
+
+    def __init__(self, payload: Any, clientMutationId: Optional[str]) -> None:
+        self._payload = payload
+        self.clientMutationId = clientMutationId
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._payload, name)
+
+
+def attach_client_mutation_id(
+    payload: Any, clientMutationId: Optional[str]
+) -> Any:
+    if payload is None:
+        return NullResult(clientMutationId)
+    if isinstance(payload, Mapping):
+        try:
+            payload["clientMutationId"] = clientMutationId  # type: ignore
+        except TypeError:
+            # read-only mapping: attach the id to a copy instead,
+            # leaving the original mapping untouched
+            payload = dict(payload)
+            payload["clientMutationId"] = clientMutationId
+        return payload
+    try:
+        payload.clientMutationId = clientMutationId
+    except AttributeError:
+        # immutable payload (e.g. a frozen dataclass): wrap it instead of
+        # mutating it, so it can safely be shared between requests
+        return ImmutableResult(payload, clientMutationId)
+    return payload
 
 
 def mutation_with_client_mutation_id(
@@ -61,6 +102,11 @@ def mutation_with_client_mutation_id(
     and the input fields as keyword arguments, and it should return an object
     (or a dict) with an attribute (or a key) for each output field.
     It may return synchronously or asynchronously.
+
+    If the returned payload is immutable (e.g. a frozen dataclass or a
+    read-only mapping), it is not modified; the clientMutationId is attached
+    to a wrapper (or a copy) instead, so the same immutable payload can be
+    reused by different requests.
     """
 
     def augmented_input_fields() -> GraphQLInputFieldMap:
@@ -79,35 +125,18 @@ def mutation_with_client_mutation_id(
 
     input_type = GraphQLInputObjectType(name + "Input", fields=augmented_input_fields)
 
-    if iscoroutinefunction(mutate_and_get_payload):
+    # noinspection PyShadowingBuiltins
+    def resolve(_root: Any, info: GraphQLResolveInfo, input: Dict) -> Any:
+        payload = mutate_and_get_payload(info, **input)
+        clientMutationId = input.get("clientMutationId")
+        if isawaitable(payload):
 
-        # noinspection PyShadowingBuiltins
-        async def resolve(_root: Any, info: GraphQLResolveInfo, input: Dict) -> Any:
-            payload = await mutate_and_get_payload(info, **input)
-            clientMutationId = input.get("clientMutationId")
-            if payload is None:
-                return NullResult(clientMutationId)
-            if isinstance(payload, Mapping):
-                payload["clientMutationId"] = clientMutationId  # type: ignore
-            else:
-                payload.clientMutationId = clientMutationId
-            return payload
+            async def resolve_awaited_payload() -> Any:
+                payload_ = await payload
+                return attach_client_mutation_id(payload_, clientMutationId)
 
-    else:
-
-        # noinspection PyShadowingBuiltins
-        def resolve(  # type: ignore
-            _root: Any, info: GraphQLResolveInfo, input: Dict
-        ) -> Any:
-            payload = mutate_and_get_payload(info, **input)
-            clientMutationId = input.get("clientMutationId")
-            if payload is None:
-                return NullResult(clientMutationId)
-            if isinstance(payload, Mapping):
-                payload["clientMutationId"] = clientMutationId  # type: ignore
-            else:
-                payload.clientMutationId = clientMutationId  # type: ignore
-            return payload
+            return resolve_awaited_payload()
+        return attach_client_mutation_id(payload, clientMutationId)
 
     return GraphQLField(
         output_type,
