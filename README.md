@@ -126,6 +126,9 @@ for nodes and for implementing global IDs around local IDs.
  - `from_global_id` takes the "global ID" created by `to_global_id`, and
     returns the type name and ID used to create it.
  - `global_id_field` creates the configuration for an `id` field on a node.
+ - `global_id_scalar` creates a strict input scalar for mutation arguments and
+    input objects. The scalar declares which node types it accepts, and resolvers
+    receive a `ResolvedGlobalId(type, id)` value instead of the raw string.
  - `plural_identifying_root_field` creates a field that accepts a list of
     non-ID identifiers (like a username) and maps then to their corresponding
     objects.
@@ -182,6 +185,35 @@ of the function mapping ID to object. It then uses the `global_id_field` method 
 create the `id` field on `Faction`, which also ensures implements the
 `node_interface`. Finally, it adds the `node` field to the query type, using the
 `node_field` returned by `node_definitions`.
+
+Strict mutation inputs can use separate node ID scalars to prevent an ID meant
+for one node type from being decoded as another:
+
+```python
+user_id_type = global_id_scalar("UserID", ["User"])
+product_id_type = global_id_scalar("ProductID", ["Product"])
+
+assign_owner_input = GraphQLInputObjectType(
+    "AssignOwnerInput",
+    {
+        "userId": GraphQLInputField(GraphQLNonNull(user_id_type)),
+        "productId": GraphQLInputField(GraphQLNonNull(product_id_type)),
+    },
+)
+
+def assign_owner(_root, _info, input):
+    # input["userId"] and input["productId"] are ResolvedGlobalId values.
+    owner = get_user(input["userId"].id)
+    return set_product_owner(input["productId"].id, owner)
+```
+
+Invalid Base64, empty node types, and node types not allowed by the scalar are
+rejected during GraphQL input coercion, before the mutation resolver runs. When
+more than one public type maps to the same internal type, the extra public type
+can be supplied through `aliases`. For example,
+`global_id_scalar("AccountID", ["Account"], aliases={"User": "Account"})`
+decodes a `User` global ID as type `Account`. Conflicting alias mappings are
+rejected while constructing the `GraphQLSchema`.
 
 ### Mutations
 
