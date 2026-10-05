@@ -50,7 +50,13 @@ from .node.node import node_definitions, GraphQLNodeDefinitions
 from .node.plural import plural_identifying_root_field
 
 # Utilities for creating global IDs in systems that don't have them
-from .node.node import from_global_id, global_id_field, to_global_id, ResolvedGlobalId
+from .node.node import (
+    from_global_id,
+    global_id_field,
+    global_id_scalar,
+    to_global_id,
+    ResolvedGlobalId,
+)
 
 __version__ = version
 __version_info__ = version_info
@@ -77,6 +83,7 @@ __all__ = [
     "from_global_id",
     "get_offset_with_default",
     "global_id_field",
+    "global_id_scalar",
     "GraphQLConnectionDefinitions",
     "GraphQLNodeDefinitions",
     "MutationFn",
