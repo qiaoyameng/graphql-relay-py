@@ -81,6 +81,13 @@ member object, and returns a cursor for use in the mutation payload.
  and returns an opaque cursor for use in the mutation payload.
  - `cursor_to_offset` takes an opaque cursor (created with `offset_to_cursor`)
 and returns the corresponding array index.
+ - `connection_from_ordered_source` is a helper method for ordered data
+sources that cannot materialize the whole result set. The source fetches
+slices forward and backward relative to exclusive boundary keys composed of
+a composite sort key and a unique key. Records can be permission-filtered
+after fetching, cursors are based on the ordering keys instead of array
+offsets, and an optional scan limit raises `IncompleteScanError` when there
+is not enough evidence to determine the connection.
 
 An example usage of these methods from the [test schema](tests/star_wars_schema.py):
 
